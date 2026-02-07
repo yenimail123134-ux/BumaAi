@@ -3,3 +3,4 @@ groq
 Pillow
 youtube-transcript-api
 mcstatus
+mcrcon
