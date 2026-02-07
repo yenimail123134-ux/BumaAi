@@ -1,101 +1,67 @@
 import discord
 import os
-import io
-from google import genai
+from groq import Groq 
 import http.server
 import threading
 
-# --- 1. RENDER PORT ÇÖZÜMÜ ---
+# --- 1. RENDER PORT VE SUNUCU ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     class TinyHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"Buma AI is RUNNING!")
-        def do_HEAD(self):
-            self.send_response(200)
-            self.end_headers()
-            
+            self.wfile.write(b"Buma AI (Groq Edition) is RUNNING!")
     server_address = ('', port)
     httpd = http.server.HTTPServer(server_address, TinyHandler)
-    print(f"--- Buma Sunucusu {port} portunda dinliyor ---")
     httpd.serve_forever()
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # --- 2. AYARLAR --- [cite: 2026-02-02, 2026-02-03]
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-GEMINI_KEY = os.environ.get('GEMINI_KEY', "AIzaSyDQxzO_DgAjDy0VwXWhw_ztpeUpARv85TQ")
-HEDEF_KANAL_ID = 1463174455130980433 
+GROQ_API_KEY = "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" # Aldığın keyi buraya koy agam
 
-client_gemini = genai.Client(api_key=GEMINI_KEY)
+client_groq = Groq(api_key=GROQ_API_KEY)
 intents = discord.Intents.default()
 intents.message_content = True 
 client_discord = discord.Client(intents=intents)
 
-# --- 3. BOT OLAYLARI ---
-
 @client_discord.event
 async def on_ready():
-    print(f'Buma AI (oyna.bumamc.com) 2.0 AKTİF! [cite: 2026-02-03]')
-    if HEDEF_KANAL_ID:
-        try:
-            channel = client_discord.get_channel(HEDEF_KANAL_ID)
-            if channel:
-                await channel.send("🚀 **Agam 2.0 beyniyle geldim!** Buma AI (oyna.bumamc.com) şu an aktif. Soruları alalım!")
-        except Exception as e:
-            print(f"Anons hatası: {e}")
+    print(f'Buma AI Groq Motoruyla AKTİF! IP: oyna.bumamc.com [cite: 2026-02-03]')
 
 @client_discord.event
 async def on_message(message):
     if message.author == client_discord.user: return
     
+    # Etiketlenince veya DM gelince çalış
     if client_discord.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         async with message.channel.typing():
             try:
-                content_parts = []
-                
-                # GÖRSEL İŞLEME (2.0 Flash için optimize edildi)
-                if message.attachments:
-                    for attachment in message.attachments:
-                        if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
-                            img_data = await attachment.read()
-                            content_parts.append({
-                                "mime_type": attachment.content_type or "image/jpeg",
-                                "data": img_data
-                            })
-                
-                # METİN VE SİSTEM TALİMATI [cite: 2026-02-02]
                 user_text = message.clean_content.replace(f'@{client_discord.user.name}', '').strip()
-                prompt = (
-                    "Sen Buma Network (oyna.bumamc.com) dahi asistanısın. Oyunculara 'agam' de. "
-                    "Görselleri Minecraft ve sunucu evreniyle bağdaştırarak yorumla. "
-                    f"\n\nKullanıcı Mesajı: {user_text if user_text else 'Görsel gönderdi.'}"
-                )
-                content_parts.append(prompt)
-
-                # GEMINI 2.0 FLASH MOTORU
-                response = client_gemini.models.generate_content(
-                    model="gemini-2.0-flash", 
-                    contents=content_parts,
-                    config={
-                        "safety_settings": [
-                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}
-                        ]
-                    }
+                
+                # GROQ (Llama 3.3) SORGUSU
+                completion = client_groq.chat.completions.create(
+                    model="llama-3.3-70b-versatile", # Şu anki en dahi ve hızlı model
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": (
+                                "Sen Buma Network (oyna.bumamc.com) Minecraft sunucusunun dahi asistanısın. "
+                                "Oyunculara her zaman 'agam' diye hitap et. Samimi, fırlama ve dahi ol. "
+                                "IP Adresimiz: oyna.bumamc.com [cite: 2026-02-03]"
+                            )
+                        },
+                        {"role": "user", "content": user_text}
+                    ]
                 )
                 
-                if response.text:
-                    await message.reply(response.text[:2000])
-                else:
-                    await message.reply("Düşündüm ama bir şey diyemedim agam!")
+                response = completion.choices[0].message.content
+                await message.reply(response[:2000])
 
             except Exception as e:
                 print(f"HATA: {e}")
-                await message.reply(f"2.0 beynimde kısa devre oldu agam! (Detay: {str(e)[:40]}...)")
+                await message.reply(f"Groq beynimde kısa devre oldu agam! (Detay: {str(e)[:30]}...)")
 
 client_discord.run(DISCORD_TOKEN)
