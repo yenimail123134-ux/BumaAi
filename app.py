@@ -56,12 +56,11 @@ async def on_message(message):
             try:
                 content_parts = []
                 
-                # GÖRSEL İŞLEME: 400 hatasını önlemek için bytes formatı
+                # GÖRSEL İŞLEME
                 if message.attachments:
                     for attachment in message.attachments:
                         if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
                             img_data = await attachment.read()
-                            # PIL (Image.open) kullanmadan direkt bytes ve mime_type gönderiyoruz
                             content_parts.append({
                                 "mime_type": attachment.content_type or "image/jpeg",
                                 "data": img_data
@@ -76,16 +75,16 @@ async def on_message(message):
                 )
                 content_parts.append(prompt)
 
-                # GEMINI CEVAP [cite: 2026-02-02]
+                # GEMINI CEVAP (Kategoriler Güncellendi)
                 response = client_gemini.models.generate_content(
                     model="gemini-1.5-flash",
                     contents=content_parts,
                     config={
                         "safety_settings": [
-                            {"category": "HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                            {"category": "HARASSMENT", "threshold": "BLOCK_NONE"},
-                            {"category": "DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                            {"category": "SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}
+                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}
                         ]
                     }
                 )
@@ -97,7 +96,6 @@ async def on_message(message):
 
             except Exception as e:
                 print(f"HATA: {e}")
-                # Hatanın ilk 40 karakterini kullanıcıya gösteriyoruz ki anlayalım
                 await message.reply(f"Beynimde bir kısa devre oldu agam! (Detay: {str(e)[:40]}...)")
 
 client_discord.run(DISCORD_TOKEN)
