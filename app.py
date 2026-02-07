@@ -15,7 +15,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --------------------------------
 
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_KEY = "AIzaSyAHc3B8saelCuZH9_wShhj-kOr2luGdQ58"
 
 # Yeni Gemini Kurulumu
 client_gemini = genai.Client(api_key=GEMINI_KEY)
