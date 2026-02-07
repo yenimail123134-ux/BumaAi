@@ -93,7 +93,7 @@ class BumaNexus(commands.Bot):
 
     async def run_rcon(self, command: str):
         try:
-            with MCRcon(MC_SERVER_IP, RCON_PASSWORD, port=25575) as mcr:
+            with MCRcon(MC_SERVER_IP, RCON_PASSWORD, port=26413) as mcr:
                 return mcr.command(command)
         except Exception as e:
             return f"❌ Sunucuya ulaşılamadı Kurucum: {e}"
