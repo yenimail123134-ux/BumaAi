@@ -5,7 +5,7 @@ from google import genai
 import http.server
 import threading
 
-# --- 1. RENDER İÇİN KESİN PORT ÇÖZÜMÜ ---
+# --- 1. RENDER PORT ÇÖZÜMÜ ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     class TinyHandler(http.server.SimpleHTTPRequestHandler):
@@ -38,12 +38,12 @@ client_discord = discord.Client(intents=intents)
 
 @client_discord.event
 async def on_ready():
-    print(f'Buma AI (oyna.bumamc.com) AKTİF! [cite: 2026-02-03]')
+    print(f'Buma AI (oyna.bumamc.com) 2.0 AKTİF! [cite: 2026-02-03]')
     if HEDEF_KANAL_ID:
         try:
             channel = client_discord.get_channel(HEDEF_KANAL_ID)
             if channel:
-                await channel.send("🚀 **Agam ben geldim!** Buma AI (oyna.bumamc.com) şu an aktif. Soruları alalım!")
+                await channel.send("🚀 **Agam 2.0 beyniyle geldim!** Buma AI (oyna.bumamc.com) şu an aktif. Soruları alalım!")
         except Exception as e:
             print(f"Anons hatası: {e}")
 
@@ -56,7 +56,7 @@ async def on_message(message):
             try:
                 content_parts = []
                 
-                # GÖRSEL İŞLEME
+                # GÖRSEL İŞLEME (2.0 Flash için optimize edildi)
                 if message.attachments:
                     for attachment in message.attachments:
                         if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
@@ -66,18 +66,18 @@ async def on_message(message):
                                 "data": img_data
                             })
                 
-                # METİN İŞLEME [cite: 2026-02-02]
+                # METİN VE SİSTEM TALİMATI [cite: 2026-02-02]
                 user_text = message.clean_content.replace(f'@{client_discord.user.name}', '').strip()
                 prompt = (
                     "Sen Buma Network (oyna.bumamc.com) dahi asistanısın. Oyunculara 'agam' de. "
                     "Görselleri Minecraft ve sunucu evreniyle bağdaştırarak yorumla. "
-                    f"\n\nKullanıcı: {user_text if user_text else 'Görsel gönderdi.'}"
+                    f"\n\nKullanıcı Mesajı: {user_text if user_text else 'Görsel gönderdi.'}"
                 )
                 content_parts.append(prompt)
 
-                # GEMINI CEVAP (Kategoriler Güncellendi)
+                # GEMINI 2.0 FLASH MOTORU
                 response = client_gemini.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.0-flash", 
                     contents=content_parts,
                     config={
                         "safety_settings": [
@@ -96,6 +96,6 @@ async def on_message(message):
 
             except Exception as e:
                 print(f"HATA: {e}")
-                await message.reply(f"Beynimde bir kısa devre oldu agam! (Detay: {str(e)[:40]}...)")
+                await message.reply(f"2.0 beynimde kısa devre oldu agam! (Detay: {str(e)[:40]}...)")
 
 client_discord.run(DISCORD_TOKEN)
