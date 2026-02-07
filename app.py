@@ -35,7 +35,7 @@ GEMINI_KEY = "AIzaSyDQxzO_DgAjDy0VwXWhw_ztpeUpARv85TQ"
 
 # Hangi kanala "Ben geldim" yazsın? (Kanal ID'sini buraya sayı olarak yaz)
 # Örnek: HEDEF_KANAL_ID = 123456789012345678
-HEDEF_KANAL_ID = 1335967657960308740 # <--- BURAYA KENDİ KANAL ID'Nİ YAPIŞTIR AGAM!
+HEDEF_KANAL_ID = 1463174455130980433 # <--- BURAYA KENDİ KANAL ID'Nİ YAPIŞTIR AGAM!
 
 client_gemini = genai.Client(api_key=GEMINI_KEY)
 
