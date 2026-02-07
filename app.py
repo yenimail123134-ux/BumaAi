@@ -1,139 +1,109 @@
 import discord
-import os
-import io
-import re
-import threading
-import http.server
-from datetime import datetime
+from discord.ext import commands
+import os, io, threading, http.server
 from groq import Groq
-from youtube_transcript_api import YouTubeTranscriptApi
 from mcstatus import JavaServer
-from PIL import Image
 
-# --- 1. SUNUCU AYAKTA TUTMA (Render için) ---
+# --- 1. RENDER CANLILIK DESTEĞİ ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     class TinyHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"Buma AI (Full Edition) is RUNNING!")
-    try:
-        httpd = http.server.HTTPServer(('', port), TinyHandler)
-        httpd.serve_forever()
-    except Exception as e:
-        print(f"Server hatası: {e}")
+            self.wfile.write(b"Buma Harbi Moderator is ACTIVE!")
+    httpd = http.server.HTTPServer(('', port), TinyHandler)
+    httpd.serve_forever()
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# --- 2. AYARLAR VE TOKENLAR ---
-# Render Environment Variables kısmından çekiyoruz agam
-DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN') 
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
-
-# Eğer Render'a girmeden denemek istersen buraya tırnak içinde yazabilirsin:
-if not GROQ_API_KEY:
-    GROQ_API_KEY = "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"
-
+# --- 2. AYARLAR ---
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
+GROQ_API_KEY = "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"
 client_groq = Groq(api_key=GROQ_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True # Sunucu kişi sayısını çekmek için
-client_discord = discord.Client(intents=intents)
+intents.members = True
 
-# --- 3. YARDIMCI ARAÇLAR (MC ve YouTube) ---
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+# --- 3. SUNUCU DURUMU ---
 def get_mc_status():
     try:
         server = JavaServer.lookup("oyna.bumamc.com")
         status = server.status()
-        return f"Şu an sunucuda {status.players.online}/{status.players.max} oyuncu var. Sürüm: {status.version.name}"
-    except:
-        return "Sunucu şu an kapalı veya ulaşılamıyor agam."
+        return f"Sunucu Aktif: {status.players.online} oyuncu içeride. [cite: 2026-02-03]"
+    except: return "Sunucuya şu an ulaşılamıyor agam. [cite: 2026-02-03]"
 
-def get_yt_transcript(url):
-    video_id = None
-    if "v=" in url: video_id = url.split("v=")[1].split("&")[0]
-    elif "youtu.be" in url: video_id = url.split("/")[-1]
-    if video_id:
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['tr', 'en'])
-            return " ".join([t['text'] for t in transcript])[:4000]
-        except: return "Altyazı bulunamadı veya kapalı."
-    return None
+# --- 4. SERT MODERASYON KOMUTLARI ---
 
-# --- 4. ANA BOT OLAYLARI ---
-@client_discord.event
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def sil(ctx, miktar: int):
+    """Mesajları temizler: !sil 10"""
+    await ctx.channel.purge(limit=miktar + 1)
+    await ctx.send(f"{miktar} mesajı süpürdüm patron. Tertemiz! ✨", delete_after=3)
+
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def at(ctx, uye: discord.Member, *, sebep="Kural dışı hareket"):
+    """Oyuncuyu sunucudan atar"""
+    await uye.kick(reason=sebep)
+    await ctx.send(f"{uye.display_name} kapının önüne konuldu. Sebep: {sebep}")
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def yasakla(ctx, uye: discord.Member, *, sebep="Ağır ihlal"):
+    """Oyuncuyu banlar"""
+    await uye.ban(reason=sebep)
+    await ctx.send(f"{uye.display_name} biletini kestim, bir daha gelemez! 🔨")
+
+# --- 5. ANA ZEKA VE FİLTRELEME ---
+
+@bot.event
 async def on_ready():
-    print(f'--- Buma AI Aktif! Patron: Salih (Buma1) ---')
+    print(f'Buma Harbi Moderator Hazır! IP: oyna.bumamc.com')
 
-@client_discord.event
+@bot.event
 async def on_message(message):
-    if message.author == client_discord.user: return
+    if message.author == bot.user: return
 
-    is_mentioned = client_discord.user.mentioned_in(message)
-    is_dm = isinstance(message.channel, discord.DMChannel)
+    # AI Destekli Kelime/Reklam Filtresi
+    if not message.author.guild_permissions.manage_messages:
+        test = client_groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "system", "content": "Sadece küfür veya reklam varsa 'YASAK' yaz, yoksa 'TEMİZ' yaz."},
+                      {"role": "user", "content": message.content}]
+        )
+        if "YASAK" in test.choices[0].message.content.upper():
+            await message.delete()
+            return
 
-    if is_mentioned or is_dm:
+    # Etiketleme veya DM durumunda dahi asistan devreye girer
+    if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         async with message.channel.typing():
-            try:
-                user_text = message.clean_content.replace(f'@{client_discord.user.name}', '').strip()
-                
-                # 1. Minecraft Verisi
-                mc_info = get_mc_status()
-                
-                # 2. Görsel Analiz (Pillow Bilgisi)
-                img_desc = ""
-                if message.attachments:
-                    for attach in message.attachments:
-                        if any(attach.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg']):
-                            img_data = await attach.read()
-                            img = Image.open(io.BytesIO(img_data))
-                            img_desc = f"\n[Görsel Bilgisi: {attach.filename}, Boyut: {img.size}]"
+            user_text = message.clean_content.replace(f'@{bot.user.name}', '').strip()
+            
+            # SİSTEM TALİMATLARI (SENİN İSTEDİĞİN KURALLAR)
+            system_prompt = (
+                "Sen Buma Network moderatörüsün. İsmin Buma AI. [cite: 2026-02-02]"
+                "KURALLAR: \n"
+                "1. Söylediğin her şeyi doğruluğu için iki kez kontrol et. Sadece gerçekleri söyle. [cite: 2026-02-02]\n"
+                "2. ASLA robotik olma. Samimi, kısa ve öz konuş. Uzun 'inek' yazılarından kaçın. [cite: 2026-02-02]\n"
+                "3. SADECE TÜRKÇE KONUŞ. Araya İngilizce veya başka dil karıştırma. [cite: 2026-02-02]\n"
+                "4. Salih'e (Buma1) 'Kurucum' de, diğerlerine 'Agam' diye hitap et. [cite: 2026-02-02]\n"
+                "5. Asla görsel oluşturma. [cite: 2026-01-28]\n"
+                f"Güncel Sunucu Durumu: {get_mc_status()} [cite: 2026-02-03]"
+            )
 
-                # 3. YouTube Özeti
-                yt_info = ""
-                if "youtube.com" in user_text or "youtu.be" in user_text:
-                    yt_text = get_yt_transcript(user_text)
-                    if yt_text: yt_info = f"\nYouTube Video İçeriği: {yt_text}"
+            cevap = client_groq.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
+                temperature=0.6 # Daha tutarlı ve dürüst cevaplar için
+            )
+            await message.reply(cevap.choices[0].message.content)
 
-                # 4. Kurucu ve Ortam Tanıma
-                role_info = "Oyuncu"
-                uye_sayisi = message.guild.member_count if message.guild else "Bilinmiyor"
-                if message.author.name == "salih070068":
-                    role_info = "KURUCU/PATRON (Buma1)"
+    await bot.process_commands(message)
 
-                # --- SİSTEM TALİMATI ---
-                system_prompt = (
-                    "Sen Buma Network (oyna.bumamc.com) Minecraft sunucusunun dahi asistanısın. "
-                    f"Şu anki Sunucu Durumu: {mc_info}. "
-                    f"Konuştuğun Kişi: {message.author.display_name} ({role_info}). "
-                    f"Sunucu Üye Sayısı: {uye_sayisi}. "
-                    "KURAL: Asla robotik olma. 'Agam' diye hitap et. Salih'e 'Patron' de. "
-                    "Zeki, fırlama ve yardımsever ol. "
-                    f"{img_desc}"
-                    f"{yt_info}"
-                )
-
-                # GROQ SORGUSU (Llama 3.3)
-                chat_completion = client_groq.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_text}
-                    ],
-                    temperature=0.8 # Daha insansı cevaplar
-                )
-
-                response = chat_completion.choices[0].message.content
-                await message.reply(response[:2000])
-
-            except Exception as e:
-                print(f"Hata: {e}")
-                await message.reply("Agam beynim yandı, bir terslik var! (Hata oluştu)")
-
-# Botu Başlat
-if DISCORD_TOKEN:
-    client_discord.run(DISCORD_TOKEN)
-else:
-    print("HATA: DISCORD_TOKEN bulunamadı! Render panelinden Environment Variables ekle.")
+bot.run(DISCORD_TOKEN)
