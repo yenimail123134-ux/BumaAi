@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import os, io, threading, http.server
+import os, threading, http.server
 from groq import Groq
 from mcstatus import JavaServer
 
@@ -28,7 +28,19 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# --- 3. SUNUCU DURUMU ---
+# --- 3. HAFIZA SİSTEMİ (UNUTMAMASI İÇİN) ---
+# Her kanal için son 10 mesajı aklında tutar
+hafıza = {} 
+
+def hafıza_yonet(kanal_id, rol, icerik):
+    if kanal_id not in hafıza:
+        hafıza[kanal_id] = []
+    hafıza[kanal_id].append({"role": rol, "content": icerik})
+    # Hafızayı taze tut: Son 10 mesajdan fazlasını sil (limit aşılmasın)
+    if len(hafıza[kanal_id]) > 10:
+        hafıza[kanal_id].pop(0)
+
+# --- 4. SUNUCU DURUMU ---
 def get_mc_status():
     try:
         server = JavaServer.lookup("oyna.bumamc.com")
@@ -36,30 +48,7 @@ def get_mc_status():
         return f"Sunucu Aktif: {status.players.online} oyuncu içeride. [cite: 2026-02-03]"
     except: return "Sunucuya şu an ulaşılamıyor agam. [cite: 2026-02-03]"
 
-# --- 4. SERT MODERASYON KOMUTLARI ---
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def sil(ctx, miktar: int):
-    """Mesajları temizler: !sil 10"""
-    await ctx.channel.purge(limit=miktar + 1)
-    await ctx.send(f"{miktar} mesajı süpürdüm patron. Tertemiz! ✨", delete_after=3)
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def at(ctx, uye: discord.Member, *, sebep="Kural dışı hareket"):
-    """Oyuncuyu sunucudan atar"""
-    await uye.kick(reason=sebep)
-    await ctx.send(f"{uye.display_name} kapının önüne konuldu. Sebep: {sebep}")
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def yasakla(ctx, uye: discord.Member, *, sebep="Ağır ihlal"):
-    """Oyuncuyu banlar"""
-    await uye.ban(reason=sebep)
-    await ctx.send(f"{uye.display_name} biletini kestim, bir daha gelemez! 🔨")
-
-# --- 5. ANA ZEKA VE FİLTRELEME ---
+# --- 5. ANA ZEKA VE HAFIZA ENTEGRASYONU ---
 
 @bot.event
 async def on_ready():
@@ -69,7 +58,7 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user: return
 
-    # AI Destekli Kelime/Reklam Filtresi
+    # AI Destekli Kelime Filtresi
     if not message.author.guild_permissions.manage_messages:
         test = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -80,29 +69,39 @@ async def on_message(message):
             await message.delete()
             return
 
-    # Etiketleme veya DM durumunda dahi asistan devreye girer
+    # Bot etiketlendiğinde veya DM atıldığında
     if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         async with message.channel.typing():
             user_text = message.clean_content.replace(f'@{bot.user.name}', '').strip()
             
-            # SİSTEM TALİMATLARI (SENİN İSTEDİĞİN KURALLAR)
+            # Hafızaya ekle
+            hafıza_yonet(message.channel.id, "user", f"{message.author.display_name}: {user_text}")
+
             system_prompt = (
-                "Sen Buma Network moderatörüsün. İsmin Buma AI. [cite: 2026-02-02]"
+                "Sen Buma Network moderatörüsün. İsmin Buma AI. [cite: 2026-02-02] "
                 "KURALLAR: \n"
                 "1. Söylediğin her şeyi doğruluğu için iki kez kontrol et. Sadece gerçekleri söyle. [cite: 2026-02-02]\n"
                 "2. ASLA robotik olma. Samimi, kısa ve öz konuş. Uzun 'inek' yazılarından kaçın. [cite: 2026-02-02]\n"
-                "3. SADECE TÜRKÇE KONUŞ. Araya İngilizce veya başka dil karıştırma. [cite: 2026-02-02]\n"
+                "3. SADECE TÜRKÇE KONUŞ. [cite: 2026-02-02]\n"
                 "4. Salih'e (Buma1) 'Kurucum' de, diğerlerine 'Agam' diye hitap et. [cite: 2026-02-02]\n"
                 "5. Asla görsel oluşturma. [cite: 2026-01-28]\n"
                 f"Güncel Sunucu Durumu: {get_mc_status()} [cite: 2026-02-03]"
             )
 
+            # Groq'a tüm hafızayı gönder
+            gonderilecek_mesajlar = [{"role": "system", "content": system_prompt}] + hafıza[message.channel.id]
+
             cevap = client_groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.6 # Daha tutarlı ve dürüst cevaplar için
+                messages=gonderilecek_mesajlar,
+                temperature=0.6
             )
-            await message.reply(cevap.choices[0].message.content)
+            
+            ai_cevap = cevap.choices[0].message.content
+            # AI cevabını da hafızaya ekle ki bir sonraki mesajda ne dediğini bilsin
+            hafıza_yonet(message.channel.id, "assistant", ai_cevap)
+            
+            await message.reply(ai_cevap)
 
     await bot.process_commands(message)
 
