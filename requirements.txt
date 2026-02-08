@@ -5,3 +5,4 @@ mcstatus
 mcrcon
 google-genai
 aiohttp[speedups]
+huggingface_hub
