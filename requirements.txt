@@ -1,0 +1,7 @@
+nextcord
+Pillow
+youtube-transcript-api
+mcstatus
+mcrcon
+google-genai
+aiohttp[speedups]
