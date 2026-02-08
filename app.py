@@ -151,7 +151,7 @@ class BumaNexus(commands.Bot):
         try:
             response = await asyncio.to_thread(
                 ai_client.models.generate_content,
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash",
                 contents=hist + [{"role": "user", "parts": [{"text": clean_msg}]}],
                 config=config
             )
