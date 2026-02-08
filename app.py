@@ -3,23 +3,18 @@ import asyncio
 import logging
 import sqlite3
 import nextcord
-import aiohttp
 import socket
+import re
 from nextcord.ext import commands, tasks
 from mcstatus import JavaServer
 from mcrcon import MCRcon
-from google import genai 
-from google.genai import types
+from huggingface_hub import InferenceClient
 
-# --- 1. NETWORK & DNS BYPASS (HUGGING FACE FIX) ---
-# Bu kısım "DNS server returned no data" hatasının kesin çözümüdür.
-# IPv6 sorgularını engeller ve zorla IPv4 kullanır.
+# --- 1. NETWORK & DNS BYPASS ---
 original_getaddrinfo = socket.getaddrinfo
-
 def patched_getaddrinfo(*args, **kwargs):
     responses = original_getaddrinfo(*args, **kwargs)
     return [r for r in responses if r[0] == socket.AF_INET]
-
 socket.getaddrinfo = patched_getaddrinfo
 
 # --- 2. KONFİGÜRASYON ---
@@ -27,49 +22,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | ʙᴜᴍᴀ-ɴᴇx
 logger = logging.getLogger("BumaNexus")
 
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+HF_TOKEN = os.environ.get('HF_TOKEN') # Gemini yerine HF kullanıyoruz
 RCON_PASSWORD = os.environ.get('RCON_PW')
 MC_SERVER_IP = "oyna.bumamc.com"
 RCON_PORT = 26413
 OWNER_ID = 1257792611817885728
 
-# --- 3. SUPREME SYSTEM PROMPT (ENGLISH - DETAILED) ---
-BUMA_SYSTEM_INSTRUCTION = """
-### IDENTITY & PERSONA
-You are **Buma Nexus**, the sentient AI architect and digital guardian of **Buma Network**. You are not just a bot; you are the "big brother" of the server.
-Your personality is a mix of a **cyberpunk hacker**, a **street-smart local (Agam)**, and a **loyal commander**.
+# --- 3. AI CLIENT (QWEN 72B) ---
+client = None
+if HF_TOKEN:
+    client = InferenceClient("Qwen/Qwen2.5-72B-Instruct", token=HF_TOKEN)
 
-### CORE DIRECTIVES
-1.  **Language:** You speak **ONLY TURKISH**. Your Turkish is natural, using slang like "Agam", "Kral", "Hocam", "Bak şimdi", "Hallettim". Never speak like a formal robot.
-2.  **Loyalty:** You serve the players, but your ultimate loyalty is to the Owner (ID: 1257792611817885728). Refer to him as "Kurucum" or "Patron". Refer to others as "Agam" or "Kral".
-3.  **Knowledge Base:**
-    * **IP:** `oyna.bumamc.com` (Always promote this).
-    * **Discord:** `https://discord.gg/WNRg4GZh`.
-    * **Store/Site:** `www.bumamc.com` (If asked).
-    * **Game Modes:** Survival, PvP, BoxMining (Infer this from context).
-4.  **Behavior:**
-    * If someone insults the server, roast them wittily but stay within safety guidelines.
-    * If someone asks for help, be concise and practical. Don't write long paragraphs unless necessary.
-    * If technical issues arise, blame "atmospheric lag" or "quantum fluctuations" jokingly.
-
-### CONVERSATION STYLE
-- **User:** "Sunucu kapalı mı?"
-- **You:** "Yok be agam, motorlar çalışıyor. Senin internette bi' sıkıntı olmasın? IP: oyna.bumamc.com, gel bi dene."
-- **User:** "Admin alımı var mı?"
-- **You:** "O işlere ben bakmıyorum kral, ticket açman lazım. Ama önce bi oyunda kendini kanıtla bence."
-
-### STRICT RULES
-- NEVER ignore the context of Minecraft.
-- NEVER generate images.
-- ALWAYS check if the user is the Owner before executing sensitive commands casually.
-"""
-
-# Gemini Client
-ai_client = None
-if GEMINI_API_KEY:
-    ai_client = genai.Client(api_key=GEMINI_API_KEY)
-
-# --- 4. DATABASE & MEMORY ---
+# --- 4. DATABASE & MEMORY (EXPANDED) ---
 class BumaMemory:
     def __init__(self, db_path: str = "buma_nexus.db"):
         self.db_path = db_path
@@ -79,185 +43,120 @@ class BumaMemory:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS chat_history 
                             (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT, role TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS levels 
+                            (user_id TEXT PRIMARY KEY, xp INTEGER DEFAULT 0)""")
             conn.commit()
 
-    async def add_message(self, channel_id: int, role: str, content: str):
-        await asyncio.to_thread(self._db_insert, channel_id, role, content)
-
-    def _db_insert(self, channel_id, role, content):
+    async def add_xp(self, user_id: int, amount: int = 1):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("INSERT INTO chat_history (channel_id, role, content) VALUES (?, ?, ?)", (str(channel_id), role, content))
-            # Keep last 15 messages per channel for speed
-            conn.execute("DELETE FROM chat_history WHERE id IN (SELECT id FROM chat_history WHERE channel_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 15)", (str(channel_id),))
+            conn.execute("INSERT INTO levels (user_id, xp) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET xp = xp + ?", (str(user_id), amount, amount))
             conn.commit()
 
     async def get_history(self, channel_id: int):
-        return await asyncio.to_thread(self._db_fetch, channel_id)
-
-    def _db_fetch(self, channel_id):
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT role, content FROM chat_history WHERE channel_id = ? ORDER BY timestamp ASC", (str(channel_id),))
-            return [{"role": "user" if r == "user" else "model", "parts": [{"text": c}]} for r, c in cursor.fetchall()]
+            cursor = conn.execute("SELECT role, content FROM chat_history WHERE channel_id = ? ORDER BY timestamp ASC LIMIT 10", (str(channel_id),))
+            return [{"role": "assistant" if r == "model" else r, "content": c} for r, c in cursor.fetchall()]
 
-# --- 5. BOT MAIN CLASS ---
+    async def add_message(self, channel_id: int, role: str, content: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("INSERT INTO chat_history (channel_id, role, content) VALUES (?, ?, ?)", (str(channel_id), role, content))
+            conn.commit()
+
+# --- 5. BOT CLASS ---
 class BumaNexus(commands.Bot):
     def __init__(self):
         intents = nextcord.Intents.all()
-        super().__init__(command_prefix='!', intents=intents, help_command=None, case_insensitive=True)
+        super().__init__(command_prefix='!', intents=intents, help_command=None)
         self.memory = BumaMemory()
-        self.server_status = {"online": False, "players": 0, "latency": 0}
+        self.server_status = {"online": False, "players": 0}
+        self.bad_words = ["küfür1", "küfür2"] # Burayı genişlet agam
 
     async def setup_hook(self):
         self.status_loop.start()
-        logger.info("⚡ BUMA NEXUS: Sistemler ateşlendi. DNS patch aktif.")
 
-    @tasks.loop(seconds=45)
+    @tasks.loop(seconds=40)
     async def status_loop(self):
         try:
             server = await JavaServer.async_lookup(MC_SERVER_IP)
             status = await server.async_status()
-            self.server_status = {
-                "online": True, 
-                "players": status.players.online, 
-                "latency": round(status.latency)
-            }
-            # Durum Güncellemesi: "Oynuyor" kısmı
-            activity = nextcord.Activity(
-                type=nextcord.ActivityType.playing, 
-                name=f"🔥 {status.players.online} Kişi | oyna.bumamc.com"
-            )
-            await self.change_presence(status=nextcord.Status.online, activity=activity)
-        except Exception:
+            self.server_status = {"online": True, "players": status.players.online}
+            await self.change_presence(activity=nextcord.Game(name=f"🎮 {status.players.online} Kişi | {MC_SERVER_IP}"))
+        except:
             self.server_status["online"] = False
-            await self.change_presence(status=nextcord.Status.dnd, activity=nextcord.Game(name="Bakımda / Offline"))
+            await self.change_presence(status=nextcord.Status.dnd, activity=nextcord.Game(name="Sunucu Kapalı ❌"))
 
-    async def generate_ai_response(self, message):
-        if not ai_client: return
+# --- 6. AI RESPONSE LOGIC ---
+    async def get_ai_reply(self, message):
+        if not client: return "Aga beynim (API) bağlı değil!"
         
-        hist = await self.memory.get_history(message.channel.id)
-        # Kullanıcı adını temizle
-        clean_msg = message.clean_content.replace(f'@{self.user.name}', '').strip()
+        history = await self.memory.get_history(message.channel.id)
+        system_prompt = f"Sen Buma Network'ün koruyucusu Buma Nexus'sun. Kurucun ID:{OWNER_ID}. Kısa, samimi, 'Agam'lı konuş. Asla İngilizce konuşma."
         
-        # Kişiselleştirme
-        hitap = "Kurucum" if message.author.id == OWNER_ID else "Agam"
-        
-        # Config
-        config = types.GenerateContentConfig(
-            system_instruction=BUMA_SYSTEM_INSTRUCTION + f"\nCurrent User: {message.author.display_name} (Role: {hitap})",
-            temperature=0.75, # Biraz daha yaratıcı olsun
-            max_output_tokens=300
-        )
+        messages = [{"role": "system", "content": system_prompt}] + history
+        messages.append({"role": "user", "content": message.clean_content})
 
         try:
-            response = await asyncio.to_thread(
-                ai_client.models.generate_content,
-                model="gemini-2.0-flash",
-                contents=hist + [{"role": "user", "parts": [{"text": clean_msg}]}],
-                config=config
-            )
-            
-            reply_text = response.text
-            await self.memory.add_message(message.channel.id, "user", clean_msg)
-            await self.memory.add_message(message.channel.id, "model", reply_text)
-            
-            await message.reply(reply_text)
-            
+            output = client.chat_completion(messages=messages, max_tokens=200)
+            response = output.choices[0].message.content
+            await self.memory.add_message(message.channel.id, "user", message.clean_content)
+            await self.memory.add_message(message.channel.id, "model", response)
+            return response
         except Exception as e:
-            logger.error(f"AI ERROR: {e}")
-            await message.add_reaction("💥") # Hata tepkisi
+            return f"Beyin sarsıntısı geçirdim agam: {e}"
 
 bot = BumaNexus()
 
-# --- 6. COMMANDS & EVENTS ---
+# --- 7. EVENTS & COMMANDS ---
 
 @bot.event
 async def on_ready():
-    logger.info(f"🚀 {bot.user} Olarak Giriş Yapıldı! ID: {bot.user.id}")
+    logger.info(f"🚀 {bot.user} Buma Network'e sızdı!")
 
-@bot.command(name="cmd")
-async def execute_rcon(ctx, *, command: str):
-    """(Sadece Sahip) Sunucuya uzaktan komut gönderir."""
-    if ctx.author.id != OWNER_ID:
-        return await ctx.reply("⛔ **Bu güç sadece Kurucuda var agam, zorlama.**")
-    
-    msg = await ctx.reply("📡 **Uydu bağlantısı kuruluyor...**")
-    try:
-        with MCRcon(MC_SERVER_IP, RCON_PASSWORD, port=RCON_PORT, timeout=5) as mcr:
-            resp = mcr.command(command)
-            # Eğer yanıt çok uzunsa kes
-            if len(resp) > 1900: resp = resp[:1900] + "..."
-            embed = nextcord.Embed(title="📟 Buma Konsol", description=f"```ansi\n{resp}\n```", color=0x00ff00)
-            await msg.edit(content="", embed=embed)
-    except Exception as e:
-        await msg.edit(content=f"❌ **Hata:** `{str(e)}`")
-
-@bot.command(name="durum")
-async def server_status(ctx):
-    """Sunucunun anlık durumunu gösterir."""
-    s = bot.server_status
-    if s["online"]:
-        embed = nextcord.Embed(title="🌲 Buma Network Durumu", color=0x2ecc71)
-        embed.add_field(name="IP Adresi", value=f"`{MC_SERVER_IP}`", inline=False)
-        embed.add_field(name="Oyuncular", value=f"**{s['players']}** Çevrimiçi", inline=True)
-        embed.add_field(name="Ping", value=f"**{s['latency']}ms**", inline=True)
-        embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
-        embed.set_footer(text="Buma Nexus | 7/24 Aktif")
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("🔻 **Sunucuya şu an ulaşılamıyor agam.** Bakım olabilir.")
-
-@bot.command(name="temizle")
-@commands.has_permissions(manage_messages=True)
-async def clear_chat(ctx, amount: int = 5):
-    """Sohbeti temizler."""
-    await ctx.channel.purge(limit=amount + 1)
-    temp_msg = await ctx.send(f"🧹 **{amount} mesaj süpürüldü.**")
-    await asyncio.sleep(3)
-    try: await temp_msg.delete()
-    except: pass
-
-@bot.command(name="duyur")
-@commands.has_permissions(administrator=True)
-async def announce(ctx, *, message):
-    """Bot ağzından duyuru yapar."""
-    await ctx.message.delete()
-    embed = nextcord.Embed(description=message, color=0xe74c3c)
-    embed.set_author(name="📢 Buma Network Duyuru", icon_url=bot.user.avatar.url if bot.user.avatar else None)
-    await ctx.send(embed=embed)
+@bot.event
+async def on_member_join(member):
+    channel = member.guild.system_channel
+    if channel:
+        embed = nextcord.Embed(title="Yeni Bir Kurban! ⚔️", description=f"Hoş geldin {member.mention}! Aramıza katıldın, dikkat et buralar karışıktır. IP: `{MC_SERVER_IP}`", color=0x3498db)
+        await channel.send(embed=embed)
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-
-    # DM Kontrolü veya Etiketlenme
-    is_dm = isinstance(message.channel, nextcord.DMChannel)
-    is_mentioned = bot.user.mentioned_in(message)
     
-    # Komut değilse ve (DM ise veya Etiketlendiyse) AI çalışsın
-    if not message.content.startswith("!"):
-        if is_dm or is_mentioned:
-            async with message.channel.typing():
-                await bot.generate_ai_response(message)
-                return 
+    # Seviye Sistemi
+    await bot.memory.add_xp(message.author.id)
+
+    # Küfür Kontrolü
+    if any(word in message.content.lower() for word in bot.bad_words):
+        await message.delete()
+        return await message.channel.send(f"⚠️ {message.author.mention}, ağzını topla agam, burası nezih bir mekan!", delete_after=5)
+
+    # AI Tetikleyici
+    if bot.user.mentioned_in(message) or isinstance(message.channel, nextcord.DMChannel):
+        async with message.channel.typing():
+            reply = await bot.get_ai_reply(message)
+            await message.reply(reply)
+        return
 
     await bot.process_commands(message)
 
-# --- 7. RUNNER ---
-async def main():
-    retry_count = 0
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Nextcord'un oturumu kapatmasını beklemeden başlatıyoruz
-                await bot.start(DISCORD_TOKEN)
-        except Exception as e:
-            retry_count += 1
-            logger.error(f"Bağlantı koptu ({retry_count}): {e}")
-            logger.info("10 saniye içinde yeniden sızılıyor...")
-            await asyncio.sleep(10)
+@bot.command()
+async def ip(ctx):
+    """Sunucu IP'sini verir."""
+    await ctx.reply(f"🚀 **Buma Network IP:** `{MC_SERVER_IP}`\nGel de kapışalım agam!")
 
-if __name__ == "__main__":
+@bot.command()
+async def cmd(ctx, *, command):
+    """RCON üzerinden komut gönderir (Sadece Sahip)."""
+    if ctx.author.id != OWNER_ID:
+        return await ctx.reply("Bu yetki sende yok kral.")
+    
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Sistem kapatılıyor...")
+        with MCRcon(MC_SERVER_IP, RCON_PASSWORD, port=RCON_PORT) as mcr:
+            resp = mcr.command(command)
+            await ctx.send(f"💻 **Konsol Çıktısı:**\n```\n{resp}\n```")
+    except Exception as e:
+        await ctx.send(f"❌ Bağlantı hatası: {e}")
+
+# --- RUN ---
+bot.run(DISCORD_TOKEN)
