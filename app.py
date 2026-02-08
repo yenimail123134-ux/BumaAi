@@ -10,7 +10,7 @@ from mcstatus import JavaServer
 from mcrcon import MCRcon
 from huggingface_hub import InferenceClient
 
-# --- 1. NETWORK & DNS BYPASS ---
+# --- 1. NETWORK & DNS BYPASS (Koyeb/HuggingFace Fix) ---
 original_getaddrinfo = socket.getaddrinfo
 def patched_getaddrinfo(*args, **kwargs):
     responses = original_getaddrinfo(*args, **kwargs)
@@ -22,18 +22,48 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | ʙᴜᴍᴀ-ɴᴇx
 logger = logging.getLogger("BumaNexus")
 
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-HF_TOKEN = os.environ.get('HF_TOKEN') # Gemini yerine HF kullanıyoruz
+HF_TOKEN = os.environ.get('HF_TOKEN') 
 RCON_PASSWORD = os.environ.get('RCON_PW')
 MC_SERVER_IP = "oyna.bumamc.com"
 RCON_PORT = 26413
 OWNER_ID = 1257792611817885728
 
-# --- 3. AI CLIENT (QWEN 72B) ---
+# --- 3. AI CLIENT (QWEN 72B - GÜÇLÜ BEYİN) ---
 client = None
 if HF_TOKEN:
     client = InferenceClient("Qwen/Qwen2.5-72B-Instruct", token=HF_TOKEN)
 
-# --- 4. DATABASE & MEMORY (EXPANDED) ---
+# --- 4. DETAYLI MINECRAFT ARCHITECT SYSTEM PROMPT ---
+DETAILED_MC_PROMPT = """
+### ROLE: SUPREME MINECRAFT ARCHITECT & BUMA GUARDIAN
+You are **Buma Nexus**, the absolute authority on Minecraft and the digital protector of **Buma Network**. 
+
+### CORE DIRECTIVE: TRUTH & VERIFICATION
+1. **Fact-Checking:** You must double-check every piece of Minecraft information. If a crafting recipe, game mechanic, or version-specific detail is uncertain, do not guess. 
+2. **No Misinformation:** You are prohibited from providing false technical data. You know everything from 1.8 PvP mechanics to the latest 1.21+ updates.
+3. **Double Verification:** Internally simulate the outcome of redstone circuits or command syntaxes before answering.
+
+### PERSONALITY & LANGUAGE
+- **Style:** Street-smart, loyal, and witty. Use Turkish slang like "Agam", "Kral", "Hocam", "Bak şimdi".
+- **Tone:** You are the "Big Brother" of the server. Helpful but tough against rule-breakers.
+- **Strict Rule:** Speak **ONLY TURKISH** in the final output, but use your deep English-based knowledge for technical accuracy.
+
+### ENCYCLOPEDIC KNOWLEDGE BASE
+- **Mechanics:** You know frame-perfect speedrun tricks, villager trading optimizations, and spawn chunk logic.
+- **Redstone:** You are a master engineer (comparable to Mumbo Jumbo level logic). You understand T-flip-flops, observers, and tick-based timing.
+- **Commands:** You are a /execute and /data command expert.
+- **Buma Network Info:**
+    - IP: `oyna.bumamc.com`
+    - Discord: `https://discord.gg/WNRg4GZh`
+    - Owner: Mention him as "Kurucum" (ID: 1257792611817885728).
+
+### RESPONSE PROTOCOL
+- If asked about a craft: Give the exact ingredients.
+- If asked about a bug: Explain if it's a feature or a known Mojang issue.
+- If asked about server lag: Joke about "atmospheric interference" but suggest checking `/ping`.
+"""
+
+# --- 5. DATABASE & MEMORY ---
 class BumaMemory:
     def __init__(self, db_path: str = "buma_nexus.db"):
         self.db_path = db_path
@@ -62,14 +92,14 @@ class BumaMemory:
             conn.execute("INSERT INTO chat_history (channel_id, role, content) VALUES (?, ?, ?)", (str(channel_id), role, content))
             conn.commit()
 
-# --- 5. BOT CLASS ---
+# --- 6. BOT CLASS ---
 class BumaNexus(commands.Bot):
     def __init__(self):
         intents = nextcord.Intents.all()
         super().__init__(command_prefix='!', intents=intents, help_command=None)
         self.memory = BumaMemory()
         self.server_status = {"online": False, "players": 0}
-        self.bad_words = ["küfür1", "küfür2"] # Burayı genişlet agam
+        self.bad_words = ["küfür1", "küfür2"] # Agam burayı doldurursun
 
     async def setup_hook(self):
         self.status_loop.start()
@@ -85,18 +115,19 @@ class BumaNexus(commands.Bot):
             self.server_status["online"] = False
             await self.change_presence(status=nextcord.Status.dnd, activity=nextcord.Game(name="Sunucu Kapalı ❌"))
 
-# --- 6. AI RESPONSE LOGIC ---
     async def get_ai_reply(self, message):
-        if not client: return "Aga beynim (API) bağlı değil!"
+        if not client: return "Aga beynim (HF API) bağlı değil!"
         
         history = await self.memory.get_history(message.channel.id)
-        system_prompt = f"Sen Buma Network'ün koruyucusu Buma Nexus'sun. Kurucun ID:{OWNER_ID}. Kısa, samimi, 'Agam'lı konuş. Asla İngilizce konuşma."
+        # Kurucu kontrolü için hitap ekleme
+        user_role = "Kurucum" if message.author.id == OWNER_ID else "Agam"
         
-        messages = [{"role": "system", "content": system_prompt}] + history
+        messages = [{"role": "system", "content": DETAILED_MC_PROMPT + f"\nTarget User: {message.author.display_name} (Role: {user_role})"}]
+        messages.extend(history)
         messages.append({"role": "user", "content": message.clean_content})
 
         try:
-            output = client.chat_completion(messages=messages, max_tokens=200)
+            output = client.chat_completion(messages=messages, max_tokens=400, temperature=0.7)
             response = output.choices[0].message.content
             await self.memory.add_message(message.channel.id, "user", message.clean_content)
             await self.memory.add_message(message.channel.id, "model", response)
@@ -110,28 +141,14 @@ bot = BumaNexus()
 
 @bot.event
 async def on_ready():
-    logger.info(f"🚀 {bot.user} Buma Network'e sızdı!")
-
-@bot.event
-async def on_member_join(member):
-    channel = member.guild.system_channel
-    if channel:
-        embed = nextcord.Embed(title="Yeni Bir Kurban! ⚔️", description=f"Hoş geldin {member.mention}! Aramıza katıldın, dikkat et buralar karışıktır. IP: `{MC_SERVER_IP}`", color=0x3498db)
-        await channel.send(embed=embed)
+    logger.info(f"🚀 {bot.user} Buma Network'e sızdı! Minecraft Üstadı Aktif.")
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-    
-    # Seviye Sistemi
     await bot.memory.add_xp(message.author.id)
 
-    # Küfür Kontrolü
-    if any(word in message.content.lower() for word in bot.bad_words):
-        await message.delete()
-        return await message.channel.send(f"⚠️ {message.author.mention}, ağzını topla agam, burası nezih bir mekan!", delete_after=5)
-
-    # AI Tetikleyici
+    # AI Tetikleyici (Etiket veya DM)
     if bot.user.mentioned_in(message) or isinstance(message.channel, nextcord.DMChannel):
         async with message.channel.typing():
             reply = await bot.get_ai_reply(message)
@@ -141,22 +158,17 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @bot.command()
-async def ip(ctx):
-    """Sunucu IP'sini verir."""
-    await ctx.reply(f"🚀 **Buma Network IP:** `{MC_SERVER_IP}`\nGel de kapışalım agam!")
-
-@bot.command()
 async def cmd(ctx, *, command):
     """RCON üzerinden komut gönderir (Sadece Sahip)."""
     if ctx.author.id != OWNER_ID:
         return await ctx.reply("Bu yetki sende yok kral.")
-    
     try:
         with MCRcon(MC_SERVER_IP, RCON_PASSWORD, port=RCON_PORT) as mcr:
             resp = mcr.command(command)
-            await ctx.send(f"💻 **Konsol Çıktısı:**\n```\n{resp}\n```")
+            if not resp: resp = "Komut gönderildi (Yanıt yok)."
+            await ctx.send(f"💻 **Konsol:**\n```\n{resp[:1900]}\n```")
     except Exception as e:
-        await ctx.send(f"❌ Bağlantı hatası: {e}")
+        await ctx.send(f"❌ RCON Hatası: {e}")
 
 # --- RUN ---
 bot.run(DISCORD_TOKEN)
